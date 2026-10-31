@@ -12,8 +12,11 @@ from lifx_control import protocol as P
 
 
 class FakeBulb(asyncio.DatagramProtocol):
-    def __init__(self, mac: str, label: str, group: str, drop_first: int = 0):
+    def __init__(self, mac: str, label: str, group: str, drop_first: int = 0, matrix: bool = False):
         self.mac, self.label, self.group = mac, label, group
+        self.matrix = matrix  # pretend to be a Ceiling/Tile with built-in effects
+        self.tile_effect = 0
+        self.color_changes = 0
         self.power = False
         self.color = P.HSBK(0, 0, 32768, 3500)
         self.drop_first = drop_first  # simulate flaky Wi-Fi: ignore N packets
@@ -49,6 +52,15 @@ class FakeBulb(asyncio.DatagramProtocol):
         elif t == P.LIGHT_SET_COLOR:
             _, h, s, b, k, _dur = struct.unpack_from("<BHHHHI", payload)
             self.color = P.HSBK(h, s, b, k)
+            self.color_changes += 1
+        elif t == P.SET_TILE_EFFECT:
+            self.tile_effect = payload[6]
+        elif t == P.GET_DEVICE_CHAIN:
+            if self.matrix:
+                self._reply(hdr, P.STATE_DEVICE_CHAIN, bytes(882), addr)
+            else:
+                self._reply(hdr, P.STATE_UNHANDLED, struct.pack("<H", t), addr)
+            return
         if hdr.ack_required:
             self._reply(hdr, P.ACKNOWLEDGEMENT, b"", addr)
         if t == P.LIGHT_GET:
@@ -76,7 +88,7 @@ if __name__ == "__main__":
     async def main():
         await start_fake("127.0.0.2", "d0:73:d5:00:00:01", "Porch", "Outside")
         await start_fake("127.0.0.3", "d0:73:d5:00:00:02", "Lamp", "Living Room")
-        await start_fake("127.0.0.4", "d0:73:d5:00:00:03", "Ceiling", "Living Room")
+        await start_fake("127.0.0.4", "d0:73:d5:00:00:03", "Ceiling", "Living Room", matrix=True)
         print("3 fake bulbs running on 127.0.0.2-4. Ctrl+C to stop.")
         await asyncio.Event().wait()
 

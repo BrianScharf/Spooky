@@ -15,6 +15,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .animations import ANIMATIONS
 from .controller import LifxController
 
 log = logging.getLogger("lifx.server")
@@ -131,7 +132,14 @@ def make_handler(runner: LoopThread):
                 return self._static("icon.svg", "image/svg+xml")
             if path == "/api/lights":
                 return self._json(
-                    {"lights": runner.call_sync(ctl.snapshot), "scenes": list(SCENES)}
+                    {
+                        "lights": runner.call_sync(ctl.snapshot),
+                        "scenes": list(SCENES),
+                        "animations": [
+                            {"name": a.name, "label": a.label, "description": a.description}
+                            for a in ANIMATIONS.values()
+                        ],
+                    }
                 )
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -168,6 +176,24 @@ def make_handler(runner: LoopThread):
                         )
                     )
                     return self._json({"results": res})
+
+                if path == "/api/animate":
+                    name = str(body.get("name", "")).lower()
+                    if name not in ANIMATIONS:
+                        return self._json({"error": "unknown animation"}, HTTPStatus.NOT_FOUND)
+                    res = runner.call(
+                        ctl.animator.start(
+                            name,
+                            ids,
+                            speed=float(body.get("speed", 1.0)),
+                            brightness=float(body.get("brightness", 100)) / 100,
+                        )
+                    )
+                    return self._json({"results": res})
+
+                if path == "/api/animate/stop":
+                    runner.call(ctl.animator.stop(ids, restore=bool(body.get("restore", True))))
+                    return self._json({"ok": True})
 
                 if path == "/api/scene":
                     name = str(body.get("name", "")).lower()

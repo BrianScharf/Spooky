@@ -5,6 +5,7 @@
     python -m lifx_control on  [NAME ...]  # NAME = bulb label or room/group
     python -m lifx_control off [NAME ...]
     python -m lifx_control scene spooky [NAME ...]
+    python -m lifx_control animate candle [NAME ...]   # Ctrl+C stops and restores
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="lifx_control", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "list", "on", "off", "scene"])
+                    choices=["serve", "list", "on", "off", "scene", "animate"])
     ap.add_argument("args", nargs="*", help="bulb/room names (or scene name first)")
     ap.add_argument("--host", default=os.environ.get("LIFX_HOST", "0.0.0.0"))
     ap.add_argument("--port", type=int, default=int(os.environ.get("LIFX_PORT", 8080)))
@@ -56,7 +57,10 @@ def main() -> None:
         from .server import serve
         serve(ctl, a.host, a.port)
         return
-    asyncio.run(_oneshot(ctl, a.command, a.args))
+    try:
+        asyncio.run(_oneshot(ctl, a.command, a.args))
+    except KeyboardInterrupt:
+        pass
 
 
 async def _oneshot(ctl: LifxController, cmd: str, args: list[str]) -> None:
@@ -73,9 +77,9 @@ async def _oneshot(ctl: LifxController, cmd: str, args: list[str]) -> None:
             return
 
         scene = None
-        if cmd == "scene":
+        if cmd in ("scene", "animate"):
             if not args:
-                raise SystemExit("usage: scene NAME [bulb/room ...]")
+                raise SystemExit(f"usage: {cmd} NAME [bulb/room ...]")
             scene, args = args[0].lower(), args[1:]
 
         ids = None
@@ -85,6 +89,18 @@ async def _oneshot(ctl: LifxController, cmd: str, args: list[str]) -> None:
                    if d["label"].lower() in wanted or d["group"].lower() in wanted]
             if not ids:
                 raise SystemExit(f"No bulb or room named {', '.join(args)}")
+
+        if cmd == "animate":
+            from .animations import ANIMATIONS
+            if scene not in ANIMATIONS:
+                raise SystemExit(f"Unknown animation. Choose from: {', '.join(ANIMATIONS)}")
+            await ctl.animator.start(scene, ids)
+            print(f"{ANIMATIONS[scene].label} running. Press Ctrl+C to stop.")
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                pass
+            return  # ctl.stop() below puts the lights back
 
         if scene:
             from .server import SCENES, _apply_scene

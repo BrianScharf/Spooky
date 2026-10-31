@@ -13,6 +13,10 @@ it from your phone's browser.
   re-sent automatically if the Wi‑Fi drops a packet.
 * **Rooms and scenes:** bulbs are grouped by the rooms you already set up in
   LIFX. There are one-tap scenes (Bright, Relax, Night, Movie, Spooky 🎃).
+* **Animations across every light:** Candle, Storm (lightning), Haunted,
+  Pumpkin, Rainbow, Breathe, Ocean and Party. They run on the whole house or on
+  one room, all in sync, with speed and brightness controls. Stop puts every
+  light back exactly how it was.
 * **No dependencies:** only Python 3.10+ is needed. Nothing to `pip install`.
 
 ## Run it
@@ -31,6 +35,7 @@ python3 -m lifx_control list                 # every bulb, its room, state and I
 python3 -m lifx_control on  "Living Room"    # a room or a bulb name
 python3 -m lifx_control off                  # everything
 python3 -m lifx_control scene spooky Porch
+python3 -m lifx_control animate lightning    # runs until Ctrl+C, then restores
 ```
 
 ### HTTP API (for Siri Shortcuts, Home Assistant, etc.)
@@ -41,12 +46,27 @@ python3 -m lifx_control scene spooky Porch
 | POST   | `/api/power`    | `{"on": true, "group": "Kitchen"}` or `{"ids": ["d0:73:d5:..."]}`, or no target for all |
 | POST   | `/api/color`    | `{"group": "Kitchen", "brightness": 40, "kelvin": 2700}` (also `hue`, `saturation`) |
 | POST   | `/api/scene`    | `{"name": "relax", "group": "Bedroom"}`                                   |
+| POST   | `/api/animate`  | `{"name": "haunted", "group": "Den", "speed": 1.5, "brightness": 70}`       |
+| POST   | `/api/animate/stop` | `{"group": "Den"}` or `{}` for everything (`"restore": false` to leave as-is) |
 | POST   | `/api/discover` | none (look for bulbs right now)                                           |
 
 ### Keep it running
 
 Copy `lifx-control.service` to `/etc/systemd/system/` (edit the user/path),
 then run `sudo systemctl enable --now lifx-control`.
+
+## How animations work
+
+* **Regular bulbs:** the server sends each bulb its next colour several times
+  a second. Every bulb shares one clock, so rooms stay in step. This needs the
+  server running; if it stops, the lights just hold their last colour.
+* **Matrix lights (Ceiling, Tile, Candle):** these are detected automatically.
+  For Candle, Pumpkin, Rainbow and Ocean the light runs its own built-in Flame
+  or Morph effect, so every zone moves on its own instead of the whole fixture
+  changing as one colour. The other animations are streamed to them like a
+  normal bulb.
+* Changing a light by hand (switch, slider, scene) stops the animation on that
+  light only.
 
 ## If bulbs aren't found
 

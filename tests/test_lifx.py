@@ -152,6 +152,14 @@ class ServerTests(unittest.TestCase):
         self._req("/api/scene", {"name": "spooky"})
         self.assertTrue(self.bulbs[0].power and self.bulbs[1].power)
         self.assertNotEqual(self.bulbs[0].color.hue, self.bulbs[1].color.hue)
+        data = self._req("/api/lights")
+        self.assertIn("candle", [a["name"] for a in data["animations"]])
+        self._req("/api/animate", {"name": "candle", "group": "Outside", "speed": 1.5})
+        lights = {d["label"]: d for d in self._req("/api/lights")["lights"]}
+        self.assertEqual(lights["Porch"]["animation"], "candle")
+        self.assertIsNone(lights["Lamp"]["animation"])
+        self._req("/api/animate/stop", {})
+        self.assertIsNone(self._req("/api/lights")["lights"][0]["animation"])
         with urllib.request.urlopen(self.base + "/") as r:
             self.assertIn(b"<title>Lights</title>", r.read())
 

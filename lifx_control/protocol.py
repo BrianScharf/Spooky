@@ -39,6 +39,15 @@ LIGHT_STATE = 107
 LIGHT_GET_POWER = 116
 LIGHT_SET_POWER = 117
 LIGHT_STATE_POWER = 118
+STATE_UNHANDLED = 223
+GET_DEVICE_CHAIN = 701  # only matrix devices (Tile, Candle, Ceiling...) answer
+STATE_DEVICE_CHAIN = 702
+SET_TILE_EFFECT = 719
+
+# Built-in firmware animations on matrix devices
+TILE_EFFECT_OFF = 0
+TILE_EFFECT_MORPH = 2
+TILE_EFFECT_FLAME = 3
 
 _HEADER = struct.Struct("<HHI Q6sBB QHH".replace(" ", ""))
 assert _HEADER.size == HEADER_SIZE
@@ -167,6 +176,25 @@ def payload_set_color(color: HSBK, duration_ms: int = 0) -> bytes:
         color.kelvin,
         max(0, int(duration_ms)),
     )
+
+
+def payload_set_tile_effect(
+    effect: int,
+    speed_ms: int = 3000,
+    palette: list[HSBK] | None = None,
+    instance_id: int = 0,
+) -> bytes:
+    """Payload for SET_TILE_EFFECT (188 bytes). Runs until turned off."""
+    palette = (palette or [])[:16]
+    body = struct.pack(
+        "<BBIBIQII", 0, 0, instance_id & 0xFFFFFFFF, effect, max(1, int(speed_ms)), 0, 0, 0
+    )
+    body += bytes(32)  # effect parameters (only used by the SKY effect)
+    body += struct.pack("<B", len(palette))
+    for c in palette:
+        body += struct.pack("<HHHH", c.hue, c.saturation, c.brightness, c.kelvin)
+    body += bytes(8 * (16 - len(palette)))
+    return body
 
 
 def payload_echo(data: bytes) -> bytes:

@@ -53,6 +53,7 @@ class Device:
     last_seen: float = 0.0
     group_checked: float = 0.0
     has_state: bool = False
+    is_matrix: bool | None = None  # None = not checked yet
 
     @property
     def online(self) -> bool:
@@ -68,6 +69,7 @@ class Device:
             "power": self.power,
             "color": self.color.to_friendly(),
             "known_state": self.has_state,
+            "matrix": bool(self.is_matrix),
         }
 
 
@@ -103,6 +105,9 @@ class LifxController:
         self._tasks: list[asyncio.Task] = []
         self._cache_dirty = False
         self._discover_now = asyncio.Event()
+        from .animations import Animator  # local import avoids a cycle
+
+        self.animator = Animator(self)
 
     # ------------------------------------------------------------------ setup
 
@@ -124,6 +129,10 @@ class LifxController:
         ]
 
     async def stop(self) -> None:
+        try:
+            await self.animator.stop(None, restore=True)
+        except Exception:
+            log.exception("could not stop animations cleanly")
         for t in self._tasks:
             t.cancel()
         self._save_cache()
@@ -148,6 +157,7 @@ class LifxController:
                 label=d.get("label", ""),
                 group=d.get("group", ""),
                 group_id=d.get("group_id", ""),
+                is_matrix=d.get("matrix"),
             )
         log.info("loaded %d bulbs from cache", len(self.devices))
 
@@ -162,6 +172,7 @@ class LifxController:
                     "label": d.label,
                     "group": d.group,
                     "group_id": d.group_id,
+                    "matrix": d.is_matrix,
                 }
                 for d in self.devices.values()
             }
@@ -244,7 +255,7 @@ class LifxController:
             fut, expected, want_mac = pending
             if hdr.type in expected and (want_mac is None or want_mac == mac):
                 if not fut.done():
-                    fut.set_result(payload)
+                    fut.set_result((hdr.type, payload))
 
     async def request(
         self,
@@ -252,7 +263,7 @@ class LifxController:
         msg_type: int,
         payload: bytes = b"",
         *,
-        expect: int,
+        expect: int | tuple[int, ...],
         retries: int = 4,
         timeout: float = 0.35,
     ) -> bytes | None:
@@ -260,18 +271,35 @@ class LifxController:
 
         Returns the response payload, or ``None`` if the bulb never answered.
         """
+        res = await self.request_raw(
+            dev, msg_type, payload, expect=expect, retries=retries, timeout=timeout
+        )
+        return None if res is None else res[1]
+
+    async def request_raw(
+        self,
+        dev: Device,
+        msg_type: int,
+        payload: bytes = b"",
+        *,
+        expect: int | tuple[int, ...],
+        retries: int = 4,
+        timeout: float = 0.35,
+    ) -> tuple[int, bytes] | None:
+        """Like :meth:`request` but returns ``(reply_type, payload)``."""
+        expected = {expect} if isinstance(expect, int) else set(expect)
         loop = asyncio.get_running_loop()
         seq = self._next_seq()
         fut: asyncio.Future = loop.create_future()
-        self._pending[seq] = (fut, {expect}, dev.mac)
+        self._pending[seq] = (fut, expected, dev.mac)
         packet = P.encode(
             msg_type,
             payload,
             source=self.source,
             sequence=seq,
             target=dev.mac,
-            ack_required=expect == P.ACKNOWLEDGEMENT,
-            res_required=expect != P.ACKNOWLEDGEMENT,
+            ack_required=expected == {P.ACKNOWLEDGEMENT},
+            res_required=expected != {P.ACKNOWLEDGEMENT},
         )
         try:
             wait = timeout
@@ -286,6 +314,16 @@ class LifxController:
             self._pending.pop(seq, None)
             if not fut.done():
                 fut.cancel()
+
+    def send_nowait(self, dev: Device, msg_type: int, payload: bytes = b"") -> None:
+        """Fire-and-forget (used for animation frames, where speed beats certainty)."""
+        packet = P.encode(
+            msg_type, payload, source=self.source, sequence=0, target=dev.mac
+        )
+        try:
+            self._send(packet, (dev.ip, dev.port))
+        except OSError as e:
+            log.debug("send to %s failed: %s", dev.ip, e)
 
     # -------------------------------------------------------------- discovery
 
@@ -329,6 +367,17 @@ class LifxController:
         await self.request(dev, P.LIGHT_GET, expect=P.LIGHT_STATE, retries=2)
         if dev.online and time.monotonic() - dev.group_checked > GROUP_REFRESH:
             await self.request(dev, P.GET_GROUP, expect=P.STATE_GROUP, retries=2)
+        if dev.online and dev.is_matrix is None:
+            # Matrix lights (Ceiling, Tile, Candle) can run built-in animations.
+            res = await self.request_raw(
+                dev,
+                P.GET_DEVICE_CHAIN,
+                expect=(P.STATE_DEVICE_CHAIN, P.STATE_UNHANDLED),
+                retries=2,
+            )
+            if res is not None:
+                dev.is_matrix = res[0] == P.STATE_DEVICE_CHAIN
+                self._cache_dirty = True
 
     async def refresh_all(self) -> None:
         await asyncio.gather(*(self.refresh(d) for d in list(self.devices.values())))
@@ -350,9 +399,16 @@ class LifxController:
         return [self.devices[i] for i in ids if i in self.devices]
 
     async def set_power(
-        self, ids: Iterable[str] | None, on: bool, duration_ms: int = 300
+        self,
+        ids: Iterable[str] | None,
+        on: bool,
+        duration_ms: int = 300,
+        *,
+        stop_animation: bool = True,
     ) -> dict[str, bool]:
         devs = self._resolve(ids)
+        if stop_animation:  # touching a light by hand ends its animation
+            await self.animator.stop([d.mac for d in devs], restore=False)
         payload = P.payload_set_power(on, duration_ms)
 
         async def one(d: Device) -> bool:
@@ -376,9 +432,12 @@ class LifxController:
         kelvin: int | None = None,
         duration_ms: int = 300,
         power_on: bool = False,
+        stop_animation: bool = True,
     ) -> dict[str, bool]:
         """Change colour. Omitted fields keep each bulb's current value."""
         devs = self._resolve(ids)
+        if stop_animation:
+            await self.animator.stop([d.mac for d in devs], restore=False)
 
         async def one(d: Device) -> bool:
             cur = d.color.to_friendly()
@@ -413,11 +472,16 @@ class LifxController:
         return {d.mac: r for d, r in zip(devs, results)}
 
     async def _power_one(self, d: Device, on: bool, duration_ms: int) -> bool:
-        res = await self.set_power([d.mac], on, duration_ms)
+        res = await self.set_power([d.mac], on, duration_ms, stop_animation=False)
         return res.get(d.mac, False)
 
     def snapshot(self) -> list[dict]:
         devs = sorted(
             self.devices.values(), key=lambda d: ((d.group or "~").lower(), (d.label or d.mac).lower())
         )
-        return [d.to_dict() for d in devs]
+        out = []
+        for d in devs:
+            item = d.to_dict()
+            item["animation"] = self.animator.current(d.mac)
+            out.append(item)
+        return out

@@ -69,6 +69,21 @@ input[type=range] { width: 100%; margin: 12px 0 0; accent-color: var(--accent); 
   border-radius: 50%; background: #fff; border: 2px solid #0003; }
 .swatches { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .swatch { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--line); }
+.target { display: flex; align-items: center; gap: 8px; margin: 0 4px 12px; color: var(--muted); font-size: 14px; }
+select { font: inherit; font-weight: 600; color: var(--text); background: var(--card); border: 1px solid var(--line);
+  border-radius: 999px; padding: 6px 12px; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 24px; }
+.panel h2 { font-size: 18px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.panel h2 span { flex: 1; }
+.anims { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.anim { border-radius: 12px; padding: 10px 8px; font-weight: 600; font-size: 14px; text-align: center;
+  background: var(--bg); border: 1px solid var(--line); }
+.anim .ico { display: block; font-size: 22px; line-height: 1.2; }
+.anim.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+.ctrls { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 8px; }
+.ctrls input { margin-top: 0; }
+.stop { background: var(--accent); color: #fff; border-color: transparent; }
+.stop[hidden] { display: none; }
 .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
 .toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px;
@@ -83,10 +98,20 @@ input[type=range] { width: 100%; margin: 12px 0 0; accent-color: var(--accent); 
     <span class="status" id="status">Connecting…</span>
     <button class="pill" id="rescan" title="Look for bulbs again">Rescan</button>
   </header>
+  <div class="target">Control <select id="target"><option value="">All lights</option></select></div>
   <div class="scenes" id="scenes">
     <button class="pill" data-all="on">All on</button>
     <button class="pill" data-all="off">All off</button>
   </div>
+  <section class="panel">
+    <h2><span>Animate</span><button class="pill stop" id="stop" hidden>Stop</button></h2>
+    <div class="anims" id="anims"></div>
+    <div class="ctrls">
+      <div class="label">Speed</div><div class="label">Brightness</div>
+      <input type="range" id="speed" min="0.25" max="3" step="0.25" value="1" aria-label="Animation speed">
+      <input type="range" id="abright" min="10" max="100" step="5" value="100" aria-label="Animation brightness">
+    </div>
+  </section>
   <div id="rooms"><div class="empty">Looking for bulbs…</div></div>
 </main>
 <div class="toast" id="toast"></div>
@@ -243,7 +268,9 @@ function update(el, l) {
   el.classList.toggle("offline", !l.online);
   $(".name b", el).textContent = l.label;
   const small = $(".name small", el);
-  small.textContent = !l.online ? "Reconnecting…" : l.power ? `${l.color.brightness}%` : "Off";
+  small.textContent = !l.online ? "Reconnecting…"
+    : l.animation ? `✨ ${(ANIMS[l.animation] || {}).label || l.animation}`
+    : l.power ? `${l.color.brightness}%` : "Off";
   small.className = l.online ? "" : "bad";
   const tg = $(".toggle", el); tg.setAttribute("aria-checked", String(l.power));
   const css = swatchCSS(l.color);
@@ -267,26 +294,93 @@ async function poll() {
     });
     if (!poll.scenes) {
       poll.scenes = true;
+      buildAnims(data.animations);
       const bar = $("#scenes");
       data.scenes.forEach(s => {
         const b = document.createElement("button"); b.className = "pill";
         b.textContent = s[0].toUpperCase() + s.slice(1);
-        b.onclick = async () => { toast(`${b.textContent} scene`); await send("/api/scene", {name: s}); poll(); };
+        b.onclick = async () => { toast(`${b.textContent} scene`); await send("/api/scene", {name: s, ...target()}); poll(); };
         bar.appendChild(b);
       });
     }
     const on = lights.filter(l => l.online).length;
     $("#status").textContent = `${on}/${lights.length} online`;
-    render();
+    render(); renderTarget(); renderAnims();
   } catch (e) {
     $("#status").textContent = "Server unreachable";
   }
 }
 
 document.querySelectorAll("[data-all]").forEach(b => b.onclick = () => {
-  const on = b.dataset.all === "on";
-  lights.forEach(l => { l.power = on; busyUntil[l.id] = Date.now() + 2500; });
-  render(); send("/api/power", {on}, lights.map(l => l.id));
+  const on = b.dataset.all === "on", ls = targetLights();
+  ls.forEach(l => { l.power = on; l.animation = null; busyUntil[l.id] = Date.now() + 2500; });
+  render(); renderAnims(); send("/api/power", {on, ...target()}, ls.map(l => l.id));
+});
+
+// ---- target (whole house or one room) and animations
+const ANIMS = {};
+const ICONS = {candle: "🕯️", lightning: "⛈️", haunted: "👻", pumpkin: "🎃", rainbow: "🌈",
+               breathe: "🫧", ocean: "🌊", party: "🎉"};
+const target = () => $("#target").value ? {group: $("#target").value} : {};
+const targetLights = () => lights.filter(l => !$("#target").value || l.group === $("#target").value);
+const allLabel = () => $("#target").value || "all lights";
+
+function renderTarget() {
+  const sel = $("#target"), rooms = [...new Set(lights.map(l => l.group))];
+  const have = [...sel.options].slice(1).map(o => o.value);
+  if (have.join("|") === rooms.join("|")) return;
+  let cur = sel.value;
+  if (!renderTarget.done) { renderTarget.done = true; try { cur = localStorage.lifxTarget || ""; } catch (e) {} }
+  sel.length = 1;
+  rooms.forEach(r => sel.add(new Option(r, r)));
+  sel.value = rooms.includes(cur) ? cur : "";
+}
+$("#target").onchange = () => { renderAnims(); try { localStorage.lifxTarget = $("#target").value; } catch (e) {} };
+
+function runningAnim() {   // the animation every targeted light is running, if they agree
+  const names = new Set(targetLights().map(l => l.animation || ""));
+  return names.size === 1 ? [...names][0] : "";
+}
+
+function buildAnims(list) {
+  const box = $("#anims");
+  list.forEach(a => {
+    ANIMS[a.name] = a;
+    const b = document.createElement("button");
+    b.className = "anim"; b.dataset.name = a.name; b.title = a.description;
+    b.innerHTML = `<span class="ico"></span><span class="txt"></span>`;
+    $(".ico", b).textContent = ICONS[a.name] || "✨"; $(".txt", b).textContent = a.label;
+    b.onclick = () => startAnim(a.name);
+    box.appendChild(b);
+  });
+}
+
+function renderAnims() {
+  const cur = runningAnim();
+  document.querySelectorAll(".anim").forEach(b => b.classList.toggle("active", b.dataset.name === cur));
+  $("#stop").hidden = !targetLights().some(l => l.animation);
+}
+
+async function startAnim(name) {
+  targetLights().forEach(l => { l.animation = name; });
+  renderAnims(); render();
+  toast(`${ANIMS[name].label} on ${allLabel()}`);
+  await send("/api/animate", {name, speed: +$("#speed").value, brightness: +$("#abright").value, ...target()});
+  poll();
+}
+
+$("#stop").onclick = async () => {
+  targetLights().forEach(l => { l.animation = null; });
+  renderAnims(); render();
+  try { await api("/api/animate/stop", target()); } catch (e) { toast("Couldn't reach the light server"); }
+  poll();
+};
+
+// Moving a slider while an animation runs restarts it with the new setting.
+let tweak;
+["#speed", "#abright"].forEach(sel => $(sel).oninput = () => {
+  clearTimeout(tweak);
+  tweak = setTimeout(() => { const cur = runningAnim(); if (cur) startAnim(cur); }, 400);
 });
 $("#rescan").onclick = async () => {
   $("#status").textContent = "Scanning…";
