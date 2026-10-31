@@ -1,0 +1,18 @@
+# systemd unit: keeps the light server running on a Raspberry Pi / Linux box.
+#   sudo cp lifx-control.service /etc/systemd/system/
+#   sudo systemctl enable --now lifx-control
+[Unit]
+Description=Local LIFX light control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Change these to wherever you cloned the repo and the user you run it as.
+User=pi
+WorkingDirectory=/home/pi/Spooky
+ExecStart=/usr/bin/python3 -m lifx_control --port 8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

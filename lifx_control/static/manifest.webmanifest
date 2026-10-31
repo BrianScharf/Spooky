@@ -1,0 +1,9 @@
+{
+  "name": "Lights",
+  "short_name": "Lights",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#14121a",
+  "theme_color": "#14121a",
+  "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}]
+}

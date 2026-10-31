@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14121a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
+<title>Lights</title>
+<style>
+:root {
+  --bg: #f4f3f7; --card: #ffffff; --text: #18161f; --muted: #6d6879;
+  --line: #e4e1ea; --accent: #f08a24; --off: #c9c5d1; --bad: #d04545;
+  --radius: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14121a; --card: #1f1c27; --text: #f1eff6; --muted: #9a94a8;
+          --line: #2e2a38; --off: #3a3546; }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: max(16px, env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom)); }
+main { max-width: 720px; margin: 0 auto; }
+header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+h1 { font-size: 26px; margin: 0; flex: 1; }
+.status { font-size: 13px; color: var(--muted); }
+button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+.pill { background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 14px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+.pill:active { transform: scale(.97); }
+.scenes { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 20px;
+  scrollbar-width: none; }
+.scenes::-webkit-scrollbar { display: none; }
+.room { margin-bottom: 24px; }
+.room-head { display: flex; align-items: center; gap: 8px; margin: 0 4px 10px; }
+.room-head h2 { font-size: 18px; margin: 0; flex: 1; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px; }
+.light { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; transition: opacity .2s; }
+.light.offline { opacity: .55; }
+.row { display: flex; align-items: center; gap: 12px; }
+.bulb { width: 44px; height: 44px; border-radius: 50%; flex: none; background: var(--off);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); transition: background .3s, box-shadow .3s; }
+.light.on .bulb { box-shadow: 0 0 18px -2px var(--glow, transparent); }
+.name { flex: 1; min-width: 0; }
+.name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name small { color: var(--muted); }
+.name small.bad { color: var(--bad); }
+.toggle { width: 52px; height: 32px; border-radius: 999px; background: var(--off); position: relative;
+  flex: none; transition: background .2s; }
+.toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px;
+  border-radius: 50%; background: #fff; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.toggle[aria-checked="true"] { background: var(--accent); }
+.toggle[aria-checked="true"]::after { transform: translateX(20px); }
+input[type=range] { width: 100%; margin: 12px 0 0; accent-color: var(--accent); height: 28px; }
+.more { background: none; color: var(--muted); font-size: 13px; padding: 6px 0 0; }
+.extra { display: none; }
+.light.open .extra { display: block; }
+.label { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.hue { -webkit-appearance: none; appearance: none; height: 14px; border-radius: 999px; margin-top: 6px;
+  background: linear-gradient(90deg, red, #ff0, lime, cyan, blue, #f0f, red); }
+.kelvin { -webkit-appearance: none; appearance: none; height: 14px; border-radius: 999px; margin-top: 6px;
+  background: linear-gradient(90deg, #ff9329, #ffd6aa, #fff, #c9e2ff); }
+.hue::-webkit-slider-thumb, .kelvin::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px;
+  border-radius: 50%; background: #fff; border: 2px solid #0003; }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.swatch { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--line); }
+.empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+.toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px;
+  opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100% - 32px); }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Lights</h1>
+    <span class="status" id="status">Connecting…</span>
+    <button class="pill" id="rescan" title="Look for bulbs again">Rescan</button>
+  </header>
+  <div class="scenes" id="scenes">
+    <button class="pill" data-all="on">All on</button>
+    <button class="pill" data-all="off">All off</button>
+  </div>
+  <div id="rooms"><div class="empty">Looking for bulbs…</div></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+let lights = [];
+const busyUntil = {};          // id -> timestamp; ignore polled state while user is fiddling
+const openCards = new Set();
+const SWATCHES = [
+  {kelvin: 2200, saturation: 0}, {kelvin: 2700, saturation: 0}, {kelvin: 4000, saturation: 0},
+  {kelvin: 6500, saturation: 0}, {hue: 0, saturation: 100}, {hue: 28, saturation: 100},
+  {hue: 55, saturation: 100}, {hue: 120, saturation: 100}, {hue: 200, saturation: 100},
+  {hue: 240, saturation: 100}, {hue: 275, saturation: 100}, {hue: 320, saturation: 100},
+];
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+
+function kelvinRGB(k) {   // rough black-body approximation for the preview dot
+  const t = k / 100; let r, g, b;
+  r = t <= 66 ? 255 : 329.7 * Math.pow(t - 60, -0.1332);
+  g = t <= 66 ? 99.47 * Math.log(t) - 161.1 : 288.1 * Math.pow(t - 60, -0.0755);
+  b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5 * Math.log(t - 10) - 305;
+  const c = v => Math.max(0, Math.min(255, Math.round(v)));
+  return [c(r), c(g), c(b)];
+}
+function swatchCSS(c) {
+  if ((c.saturation ?? 0) > 5) return `hsl(${c.hue} ${Math.max(40, c.saturation)}% 55%)`;
+  const [r, g, b] = kelvinRGB(c.kelvin || 3500); return `rgb(${r} ${g} ${b})`;
+}
+
+function report(res, what) {
+  const failed = Object.entries(res.results || {}).filter(([, ok]) => !ok)
+    .map(([id]) => (lights.find(l => l.id === id) || {}).label || id);
+  if (failed.length) toast(`${failed.join(", ")} didn't respond — retrying in the background`);
+}
+
+async function send(path, body, ids) {
+  (ids || []).forEach(id => busyUntil[id] = Date.now() + 2500);
+  try { report(await api(path, body)); }
+  catch (e) { toast("Couldn't reach the light server"); }
+}
+
+// Throttle slider updates so dragging feels live without flooding the bulbs.
+function throttled(fn, ms = 120) {
+  let last = 0, timer, args;
+  return (...a) => {
+    args = a; const now = Date.now(); clearTimeout(timer);
+    if (now - last >= ms) { last = now; fn(...args); }
+    else timer = setTimeout(() => { last = Date.now(); fn(...args); }, ms - (now - last));
+  };
+}
+
+function render() {
+  const rooms = $("#rooms");
+  if (!lights.length) {
+    rooms.innerHTML = `<div class="empty">No bulbs found yet. Make sure this computer is on the same
+      Wi‑Fi as your lights, then tap Rescan.</div>`;
+    return;
+  }
+  const groups = {};
+  lights.forEach(l => (groups[l.group] ||= []).push(l));
+  // Re-use existing DOM so sliders mid-drag aren't destroyed.
+  const seen = new Set();
+  Object.entries(groups).forEach(([name, ls]) => {
+    let sec = rooms.querySelector(`.room[data-room="${CSS.escape(name)}"]`);
+    if (!sec) {
+      sec = document.createElement("section"); sec.className = "room"; sec.dataset.room = name;
+      sec.innerHTML = `<div class="room-head"><h2></h2>
+        <button class="pill" data-act="on">On</button><button class="pill" data-act="off">Off</button></div>
+        <div class="grid"></div>`;
+      $("h2", sec).textContent = name;
+      sec.querySelectorAll(".room-head .pill").forEach(b => b.onclick = () => {
+        const on = b.dataset.act === "on";
+        const ls = lights.filter(l => l.group === name);
+        ls.forEach(l => { l.power = on; busyUntil[l.id] = Date.now() + 2500; });
+        render(); send("/api/power", {group: name, on}, ls.map(l => l.id));
+      });
+      rooms.appendChild(sec);
+    }
+    seen.add(sec);
+    const grid = $(".grid", sec);
+    ls.forEach(l => grid.appendChild(card(l)));
+  });
+  [...rooms.children].forEach(c => { if (!seen.has(c)) c.remove(); });
+}
+
+const cards = {};
+function card(l) {
+  let el = cards[l.id];
+  if (!el) {
+    el = document.createElement("div"); el.className = "light";
+    el.innerHTML = `
+      <div class="row">
+        <div class="bulb"></div>
+        <div class="name"><b></b><small></small></div>
+        <button class="toggle" role="switch" aria-label="Power"></button>
+      </div>
+      <input type="range" class="bright" min="1" max="100" aria-label="Brightness">
+      <button class="more">Colour ▾</button>
+      <div class="extra">
+        <div class="label">Colour</div><input type="range" class="hue" min="0" max="359" aria-label="Hue">
+        <div class="label">White temperature</div>
+        <input type="range" class="kelvin" min="1500" max="9000" step="100" aria-label="Kelvin">
+        <div class="swatches"></div>
+      </div>`;
+    const id = l.id, cur = () => lights.find(x => x.id === id);
+    $(".toggle", el).onclick = () => {
+      const x = cur(); x.power = !x.power; busyUntil[id] = Date.now() + 2500; update(el, x);
+      send("/api/power", {ids: [id], on: x.power}, [id]);
+    };
+    const setColor = throttled(body => send("/api/color", {ids: [id], duration: 150, ...body}, [id]));
+    $(".bright", el).oninput = e => {
+      const x = cur(); x.color.brightness = +e.target.value; x.power = true; update(el, x);
+      setColor({brightness: x.color.brightness});
+    };
+    $(".hue", el).oninput = e => {
+      const x = cur(); Object.assign(x.color, {hue: +e.target.value, saturation: 100}); x.power = true;
+      update(el, x); setColor({hue: x.color.hue, saturation: 100});
+    };
+    $(".kelvin", el).oninput = e => {
+      const x = cur(); Object.assign(x.color, {kelvin: +e.target.value, saturation: 0}); x.power = true;
+      update(el, x); setColor({kelvin: x.color.kelvin, saturation: 0});
+    };
+    $(".more", el).onclick = () => {
+      el.classList.toggle("open"); el.classList.contains("open") ? openCards.add(id) : openCards.delete(id);
+    };
+    const sw = $(".swatches", el);
+    SWATCHES.forEach(s => {
+      const b = document.createElement("button"); b.className = "swatch";
+      b.style.background = swatchCSS(s); b.setAttribute("aria-label", "Preset colour");
+      b.onclick = () => { const x = cur(); Object.assign(x.color, s); x.power = true; update(el, x);
+        send("/api/color", {ids: [id], ...s}, [id]); };
+      sw.appendChild(b);
+    });
+    cards[l.id] = el;
+  }
+  update(el, l);
+  return el;
+}
+
+function update(el, l) {
+  el.classList.toggle("on", l.power && l.online);
+  el.classList.toggle("offline", !l.online);
+  $(".name b", el).textContent = l.label;
+  const small = $(".name small", el);
+  small.textContent = !l.online ? "Reconnecting…" : l.power ? `${l.color.brightness}%` : "Off";
+  small.className = l.online ? "" : "bad";
+  const tg = $(".toggle", el); tg.setAttribute("aria-checked", String(l.power));
+  const css = swatchCSS(l.color);
+  const bulb = $(".bulb", el);
+  bulb.style.background = l.power ? css : "";
+  el.style.setProperty("--glow", css);
+  const active = document.activeElement;
+  for (const [sel, v] of [[".bright", l.color.brightness], [".hue", l.color.hue], [".kelvin", l.color.kelvin]]) {
+    const input = $(sel, el); if (input !== active) input.value = v;
+  }
+}
+
+async function poll() {
+  try {
+    const data = await api("/api/lights");
+    const now = Date.now();
+    // keep our optimistic values for bulbs the user just touched
+    lights = data.lights.map(n => {
+      const old = lights.find(o => o.id === n.id);
+      return old && busyUntil[n.id] > now ? {...n, power: old.power, color: old.color} : n;
+    });
+    if (!poll.scenes) {
+      poll.scenes = true;
+      const bar = $("#scenes");
+      data.scenes.forEach(s => {
+        const b = document.createElement("button"); b.className = "pill";
+        b.textContent = s[0].toUpperCase() + s.slice(1);
+        b.onclick = async () => { toast(`${b.textContent} scene`); await send("/api/scene", {name: s}); poll(); };
+        bar.appendChild(b);
+      });
+    }
+    const on = lights.filter(l => l.online).length;
+    $("#status").textContent = `${on}/${lights.length} online`;
+    render();
+  } catch (e) {
+    $("#status").textContent = "Server unreachable";
+  }
+}
+
+document.querySelectorAll("[data-all]").forEach(b => b.onclick = () => {
+  const on = b.dataset.all === "on";
+  lights.forEach(l => { l.power = on; busyUntil[l.id] = Date.now() + 2500; });
+  render(); send("/api/power", {on}, lights.map(l => l.id));
+});
+$("#rescan").onclick = async () => {
+  $("#status").textContent = "Scanning…";
+  try { await api("/api/discover", {}); } catch (e) {}
+  poll();
+};
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+poll(); setInterval(() => { if (!document.hidden) poll(); }, 3000);
+</script>
+</body>
+</html>
